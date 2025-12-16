@@ -44,8 +44,8 @@ This system implements a privacy-preserving voting mechanism inspired by Tornado
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/YOUR-USERNAME/YOUR-REPO-NAME.git
-cd YOUR-REPO-NAME
+git clone https://github.com/mosbahaloun/Scalable-Blockchain-Voting-with-Batched-Zero-Knowledge-Proofs-and-Decentralised-Tallying.git
+cd Scalable-Blockchain-Voting-with-Batched-Zero-Knowledge-Proofs-and-Decentralised-Tallying
 ```
 
 ### 2. Install Dependencies
@@ -174,8 +174,6 @@ Contributions welcome! Please open an issue or submit a PR.
 ---
 
 **Note:** This project demonstrates privacy-preserving voting using zero-knowledge proofs. All functionality can be tested via the test suite while the frontend is being developed.
-EOF
 
-# Now add and commit
-git add README.md .gitignore
-git commit -m "Add comprehensive README with detailed testing instructions"
+
+
