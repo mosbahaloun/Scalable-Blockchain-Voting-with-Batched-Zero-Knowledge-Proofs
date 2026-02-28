@@ -1,5 +1,4 @@
-pragma circom 2.0.0;include "util
-               ^
+pragma circom 2.0.0;
 
 
 include "./utils/mimc5sponge.circom";
