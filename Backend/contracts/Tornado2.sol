@@ -99,17 +99,46 @@ contract Tornado2 is ReentrancyGuard {
     }
 
     function deposit(
-        uint256 _commitment,
-        uint256 _newRoot,
-        uint256[10] calldata hashPairings,
-        uint8[10] calldata hashDirections
+        uint256 _commitment
     ) external payable nonReentrant {
         require(msg.value == denomination, "incorrect-amount");
         require(!commitments[_commitment], "existing-commitment");
-        require(!roots[_newRoot], "existing-root");
         require(nextLeafIdx < 2 ** treeLevel, "tree-full");
 
         commitments[_commitment] = true;
+
+        // Fix Fake Merkle Root Injection: Calculate the root on-chain!
+        uint256 currentHash = _commitment;
+        uint256 currentIndex = nextLeafIdx;
+        uint256[10] memory hashPairings;
+        uint8[10] memory hashDirections;
+
+        for (uint8 i = 0; i < treeLevel; i++) {
+            uint256 left;
+            uint256 right;
+
+            if (currentIndex % 2 == 0) {
+                left = currentHash;
+                right = levelDefaults[i]; // Use 0/default for right sibling
+                
+                hashPairings[i] = right;
+                hashDirections[i] = 0; // 0 means currentHash is on the left
+                
+                lastLevelHash[i] = currentHash;
+            } else {
+                left = lastLevelHash[i];
+                right = currentHash;
+
+                hashPairings[i] = left;
+                hashDirections[i] = 1; // 1 means currentHash is on the right
+            }
+
+            uint256[2] memory ins = [left, right];
+            currentHash = hasher.MiMCSponge(ins, 0); // 0 is the fixed key for Merkle hashing
+            currentIndex /= 2;
+        }
+
+        uint256 _newRoot = currentHash;
         roots[_newRoot] = true;
         nextLeafIdx += 1;
 
@@ -183,8 +212,8 @@ contract Tornado2 is ReentrancyGuard {
 
             address payable recipient = recipients[i];
 
-            // Optional: you can compare input[16 + i] with uint256(uint160(recipient)) if your circuit encodes addresses directly.
-            // require(input[16 + i] == uint256(uint160(recipient)), "recipient-mismatch");
+            // Fix Front-Running & Vote Hijacking: Connect proof output to real recipient!
+            require(input[16 + i] == uint256(uint160(recipient)), "recipient-mismatch");
 
             for (uint j = 0; j < candidates.length; j++) {
                 if (candidates[j].Candidate_Address == recipient) {

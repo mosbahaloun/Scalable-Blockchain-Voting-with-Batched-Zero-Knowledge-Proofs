@@ -46,7 +46,7 @@ template Withdraw() {
             right[t][i] <== d * currentHash[t][i];
             leafHashers[t][i].ins[1] <== right[t][i] + (1 - d) * hashPairings[t][i];
 
-            leafHashers[t][i].k <== cHasher[t].commitment;
+            leafHashers[t][i].k <== 0;
             currentHash[t][i + 1] <== leafHashers[t][i].o;
         }
 
