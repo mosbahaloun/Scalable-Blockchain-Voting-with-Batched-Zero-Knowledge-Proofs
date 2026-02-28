@@ -130,7 +130,7 @@ contract Tornado is ReentrancyGuard {
             }
 
             uint256[2] memory ins = [left, right];
-            currentHash = hasher.MiMCSponge(ins, 0); // 0 is the fixed key for Merkle hashing
+            currentHash = hasher.MiMC5Sponge(ins, 0); // 0 is the fixed key for Merkle hashing
             currentIndex /= 2;
         }
 
@@ -187,7 +187,7 @@ contract Tornado is ReentrancyGuard {
             address payable recipient = recipients[i];
 
             // Fix Front-Running & Vote Hijacking: Connect proof output to real recipient!
-            require(input[16 + i] == uint256(uint160(recipient)), "recipient-mismatch");
+            require(input[16 + i] == uint256(uint160(address(recipient))), "recipient-mismatch");
 
             // increment vote if recipient is a candidate
             for (uint j = 0; j < candidates.length; j++) {

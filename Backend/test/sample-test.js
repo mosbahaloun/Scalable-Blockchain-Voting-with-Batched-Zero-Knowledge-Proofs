@@ -136,41 +136,22 @@ describe("Full Test: 40 deposits, 5 batch withdrawals (8×), with addCandidate",
             const commitment = BigInt(witness[1]);
             const nullifierHash = BigInt(witness[2]);
 
-            let idx = Number(await tornado.nextLeafIdx());
-            let currentHash = commitment;
-            const key = commitment;
-
-            const hashPairings = [];
-            const pairDirection = [];
-
             const mStart = nowNs();
-            for (let i = 0; i < 10; i++) {
-                const isLeft = idx % 2 === 0;
-                const sibling = levelDefaults[i];
-                const left = isLeft ? currentHash : sibling;
-                const right = isLeft ? sibling : currentHash;
-
-                hashPairings.push(sibling);
-                pairDirection.push(isLeft ? 0 : 1);
-
-                currentHash = mimc5Sponge([left, right], key);
-                idx = Math.floor(idx / 2);
-            }
-            const mEnd = nowNs();
-            merklePathMs.push(nsToMs(mEnd - mStart));
-
-            const newRoot = currentHash;
-
             const dStart = nowNs();
             const tx = await tornado.deposit(
                 commitment,
-                newRoot,
-                hashPairings,
-                pairDirection,
                 { value: depositValue }
             );
             const receipt = await tx.wait();
             const dEnd = nowNs();
+
+            const depositEvent = receipt.events.find(e => e.event === "Deposit");
+            const newRoot = depositEvent.args.root.toBigInt();
+            const hashPairings = depositEvent.args.hashPairings.map(bn => bn.toBigInt());
+            const pairDirection = depositEvent.args.pairDirection;
+
+            const mEnd = nowNs();
+            merklePathMs.push(nsToMs(mEnd - mStart));
 
             expect(receipt.status).to.equal(1);
             console.log(`✅ Deposit ${t + 1} Gas Used:`, receipt.gasUsed.toString());

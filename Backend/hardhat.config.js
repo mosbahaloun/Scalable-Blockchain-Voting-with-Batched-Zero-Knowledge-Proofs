@@ -31,7 +31,7 @@ module.exports = {
   networks: {
     lg: {
       url: process.env.PROVIDER_URL || "http://127.0.0.1:7545", // Ensure the default URL is correct
-      accounts: [`0x${process.env.PRIVATE_KEY}`] // Make sure PRIVATE_KEY is in the .env without "0x"
+      accounts: [process.env.PRIVATE_KEY ? `0x${process.env.PRIVATE_KEY}` : "0x0000000000000000000000000000000000000000000000000000000000000001"] // Fallback if no .env
     }
   },
   etherscan: {
