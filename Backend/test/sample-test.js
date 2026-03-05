@@ -8,18 +8,19 @@ const $u = require("../utils/$u.js");
 const snarkjs = require("snarkjs");
 const { mimc5Sponge } = require("../utils/mimc5.js");
 
-describe("Full Test: 40 deposits, 5 batch withdrawals (8×), with addCandidate", function () {
+describe("Full Test: 40 deposits, 2.5 batch withdrawals (16×), with addCandidate", function () {
     let hasher, verifier, tornado, witnessCalc;
     const depositValue = ethers.utils.parseEther("0.01");
 
-    // ---- constants (8× batch) ----
-    const BATCH = 8;
-    const NUM_BATCHES = 5; // 5 * 8 = 40
+    // ---- constants (16× batch) ----
+    const BATCH = 16;  // Changed from 8 to 16
+    const TOTAL_DEPOSITS = 40; // Keep 40 deposits like original
+    const NUM_BATCHES = Math.floor(TOTAL_DEPOSITS / BATCH); // 40 / 16 = 2 full batches
 
     const depositWasm = path.join(__dirname, "../utils/batch_deposit_1.wasm");
-    // 8-note withdraw circuit artifacts
-    const withdrawWasm = path.join(__dirname, "../utils/BatchWithdraw_8.wasm");
-    const zkey = path.join(__dirname, "../utils/setup_8_final.zkey"); // must match the 8× circuit
+    // 16-note withdraw circuit artifacts
+    const withdrawWasm = path.join(__dirname, "../utils/BatchWithdraw_16.wasm");  // Updated filename
+    const zkey = path.join(__dirname, "../utils/setup16_final.zkey"); // must match the 16× circuit
 
     const levelDefaults = [
         23183772226880328093887215408966704399401918833188238128725944610428185466379n,
@@ -61,7 +62,7 @@ describe("Full Test: 40 deposits, 5 batch withdrawals (8×), with addCandidate",
         hasher = await Hasher.deploy();
         await hasher.deployed();
 
-        // Verifier compiled for the 8× withdraw circuit (24 public signals)
+        // Verifier compiled for the 16× withdraw circuit (48 public signals)
         const Verifier = await ethers.getContractFactory("Groth16Verifier");
         verifier = await Verifier.deploy();
         await verifier.deployed();
@@ -98,7 +99,7 @@ describe("Full Test: 40 deposits, 5 batch withdrawals (8×), with addCandidate",
         console.log("📊 Total Gas to Add 10 Candidates:", totalAddCandidateGas.toString());
     });
 
-    it("should perform 40 deposits and 5 batch withdrawals (BATCH=8)", async () => {
+    it("should perform 40 deposits and 2 batch withdrawals (BATCH=16)", async () => {
         const [user] = await ethers.getSigners();
 
         // timing & gas buckets
@@ -119,7 +120,7 @@ describe("Full Test: 40 deposits, 5 batch withdrawals (8×), with addCandidate",
         const decryptedProofs = [];
 
         // ---- 40 deposits ----
-        for (let t = 0; t < 40; t++) {
+        for (let t = 0; t < TOTAL_DEPOSITS; t++) {
             const secret = ethers.BigNumber.from(ethers.utils.randomBytes(32)).toString();
             const nullifier = ethers.BigNumber.from(ethers.utils.randomBytes(32)).toString();
 
@@ -183,7 +184,7 @@ describe("Full Test: 40 deposits, 5 batch withdrawals (8×), with addCandidate",
             decryptedProofs.push({ secret, nullifier, nullifierHash: nullifierHash.toString() });
         }
 
-        // ---- 5 batches (withdrawals of 8) ----
+        // ---- 2 batches (withdrawals of 16) + remaining 8 notes unused ----
         for (let i = 0; i < NUM_BATCHES; i++) {
             const sliceStart = i * BATCH;
             const sliceEnd = sliceStart + BATCH;
@@ -208,7 +209,7 @@ describe("Full Test: 40 deposits, 5 batch withdrawals (8×), with addCandidate",
             const pEnd = nowNs();
             withdrawProofMs.push(nsToMs(pEnd - pStart));
 
-            // Expect 24 public signals: 8 roots, 8 nullifierHashes, 8 recipients
+            // Expect 48 public signals: 16 roots, 16 nullifierHashes, 16 recipients (changed from 24)
             if (publicSignals.length !== 3 * BATCH) {
                 throw new Error(`expected ${3 * BATCH} public signals, got ${publicSignals.length}`);
             }
@@ -217,7 +218,7 @@ describe("Full Test: 40 deposits, 5 batch withdrawals (8×), with addCandidate",
             const b = proof.pi_b.slice(0, 2).map(row => $u.reverseCoordinate(row.map($u.BN256ToHex)));
             const c = proof.pi_c.slice(0, 2).map($u.BN256ToHex);
 
-            // [roots(8) | nullifiers(8) | recipients(8)]
+            // [roots(16) | nullifiers(16) | recipients(16)]
             const input = [
                 ...publicSignals.slice(0, BATCH),
                 ...publicSignals.slice(BATCH, 2 * BATCH),
@@ -254,7 +255,7 @@ describe("Full Test: 40 deposits, 5 batch withdrawals (8×), with addCandidate",
         let totalGas = ethers.BigNumber.from(0);
         for (const g of depositGasReceipts) totalGas = totalGas.add(g);
         for (const { gasUsed } of withdrawGasReceipts) totalGas = totalGas.add(gasUsed);
-        console.log("📊 Total Gas Used (40 deposits + 5 withdrawals of 8):", totalGas.toString());
+        console.log("📊 Total Gas Used (40 deposits + 2 withdrawals of 16):", totalGas.toString());
 
         const avgGasPrice = withdrawGasReceipts.reduce(
             (sum, { gasPrice }) => sum.add(gasPrice),
@@ -269,7 +270,7 @@ describe("Full Test: 40 deposits, 5 batch withdrawals (8×), with addCandidate",
         printStats("Deposit witness (deposit circuit)", depositWitnessMs);
         printStats("Merkle path compute (MiMC)", merklePathMs);
         printStats("Deposit inclusion (submit→mined)", depositInclMs);
-        printStats("Withdraw proof gen (batch of 8)", withdrawProofMs);
+        printStats("Withdraw proof gen (batch of 16)", withdrawProofMs);
         printStats("Withdraw inclusion (submit→mined)", withdrawInclMs);
         printStats("Batch wait (ready→submit withdraw)", batchWaitMs);
         printStats("Batch end-to-end (ready→withdraw mined)", batchEndToEndMs);
@@ -277,7 +278,7 @@ describe("Full Test: 40 deposits, 5 batch withdrawals (8×), with addCandidate",
 
     it("measures gas for 40 addVoter calls", async () => {
         const [owner] = await ethers.getSigners();
-        const N = 40;
+        const N = 40;  // Keep at 40
 
         const gasUsedPerTx = [];
         const txCostsWei = [];
