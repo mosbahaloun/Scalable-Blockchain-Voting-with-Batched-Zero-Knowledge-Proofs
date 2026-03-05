@@ -17,16 +17,11 @@ artifacts/build-info/
 circuit/*.ptau
 
 # Proving/verification keys (generated, not source)
-*.zkey
-Backend/utils/*.zkey
 Backend/scripts/*.zkey
 frontend/public/*.zkey
 circuit/build/*.zkey
 
 # Compiled WASM files (generated from .circom)
-*.wasm
-Backend/utils/*.wasm
-frontend/public/*.wasm
 
 # Generated circuit artifacts
 *.r1cs
