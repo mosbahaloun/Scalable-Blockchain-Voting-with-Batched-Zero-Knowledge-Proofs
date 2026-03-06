@@ -8,24 +8,24 @@ const $u = require("../utils/$u.js");
 const snarkjs = require("snarkjs");
 const { mimc5Sponge } = require("../utils/mimc5.js");
 
-describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8×), with addCandidate", function () {
+describe("Full Test: 32 deposits (2 batch-deposits of 16), 2 batch withdrawals (16×), with addCandidate", function () {
     let hasher, verifier, tornado, witnessCalc;
 
     // ---- constants ----
-    const BATCH_DEPOSIT  = 8;   // BatchDeposit8 circuit: 8 notes per deposit tx
-    const BATCH_WITHDRAW = 8;   // BatchWithdraw_8 circuit: 8 notes per withdraw tx
-    const TOTAL_DEPOSITS = 40;
-    const NUM_DEPOSIT_TXS  = TOTAL_DEPOSITS / BATCH_DEPOSIT;   // 5 deposit transactions
-    const NUM_WITHDRAW_TXS = TOTAL_DEPOSITS / BATCH_WITHDRAW;  // 5 withdraw transactions
+    const BATCH_DEPOSIT  = 16;  // BatchDeposit16 circuit: 16 notes per deposit tx
+    const BATCH_WITHDRAW = 16;  // BatchWithdraw_16 circuit: 16 notes per withdraw tx
+    const TOTAL_DEPOSITS = 32;  // 2 × 16 = 32 (cleanly divisible by 16)
+    const NUM_DEPOSIT_TXS  = TOTAL_DEPOSITS / BATCH_DEPOSIT;   // 2 deposit transactions
+    const NUM_WITHDRAW_TXS = TOTAL_DEPOSITS / BATCH_WITHDRAW;  // 2 withdraw transactions
 
     const depositValue      = ethers.utils.parseEther("0.01");
-    const batchDepositValue = depositValue.mul(BATCH_DEPOSIT); // 0.08 ETH per batch deposit
+    const batchDepositValue = depositValue.mul(BATCH_DEPOSIT); // 0.16 ETH per batch deposit
 
     // Circuit artifacts
-    // batch_deposit_8.wasm is the compiled BatchDeposit8 circuit
-    const depositWasm  = path.join(__dirname, "../utils/batch_deposit_8.wasm");
-    const withdrawWasm = path.join(__dirname, "../utils/BatchWithdraw_8.wasm");
-    const zkey         = path.join(__dirname, "../utils/setup_8_final.zkey");
+    // batch_deposit_16.wasm is the compiled BatchDeposit16 circuit
+    const depositWasm  = path.join(__dirname, "../utils/batch_deposit_16.wasm");
+    const withdrawWasm = path.join(__dirname, "../utils/BatchWithdraw_16.wasm");
+    const zkey         = path.join(__dirname, "../utils/setup16_final.zkey");
 
     const levelDefaults = [
         23183772226880328093887215408966704399401918833188238128725944610428185466379n,
@@ -67,7 +67,7 @@ describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8
         hasher = await Hasher.deploy();
         await hasher.deployed();
 
-        // Verifier compiled for the 8× withdraw circuit (24 public signals)
+        // Verifier compiled for the 16× withdraw circuit (48 public signals)
         const Verifier = await ethers.getContractFactory("Groth16Verifier");
         verifier = await Verifier.deploy();
         await verifier.deployed();
@@ -83,7 +83,7 @@ describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8
         );
         await tornado.deployed();
 
-        // batch_deposit_8 witness calculator
+        // batch_deposit_16 witness calculator
         const depositBuffer = fs.readFileSync(depositWasm);
         witnessCalc = await wc(depositBuffer);
 
@@ -104,7 +104,7 @@ describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8
         console.log("📊 Total Gas to Add 10 Candidates:", totalAddCandidateGas.toString());
     });
 
-    it("should perform 5 batch-deposits (8 notes each) and 5 batch withdrawals (BATCH=8)", async () => {
+    it("should perform 2 batch-deposits (16 notes each) and 2 batch withdrawals (BATCH=16)", async () => {
         const [user] = await ethers.getSigners();
 
         // timing & gas buckets
@@ -121,13 +121,13 @@ describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8
         const depositGasReceipts  = [];
         const withdrawGasReceipts = [];
 
-        // Accumulate all per-note data across all 5 deposit transactions
-        const allDecodedEvents   = [];  // length 40 after all deposits
-        const allDecryptedProofs = [];  // length 40 after all deposits
+        // Accumulate all per-note data across all 2 deposit transactions
+        const allDecodedEvents   = [];  // length 32 after all deposits
+        const allDecryptedProofs = [];  // length 32 after all deposits
 
-        // ---- 5 batch deposit transactions (8 notes each = 40 notes total) ----
+        // ---- 2 batch deposit transactions (16 notes each = 32 notes total) ----
         for (let batchIdx = 0; batchIdx < NUM_DEPOSIT_TXS; batchIdx++) {
-            // --- Generate 8 secrets/nullifiers and run the BatchDeposit8 circuit ---
+            // --- Generate 16 secrets/nullifiers and run the BatchDeposit16 circuit ---
             const secrets    = [];
             const nullifiers = [];
 
@@ -136,15 +136,15 @@ describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8
                 nullifiers.push(ethers.BigNumber.from(ethers.utils.randomBytes(32)).toString());
             }
 
-            // Circuit input: secret[8][256] and nullifier[8][256]
+            // Circuit input: secret[16][256] and nullifier[16][256]
             const depInput = {
                 secret:    secrets.map(s => $u.BN256ToBin(s).split("")),
                 nullifier: nullifiers.map(n => $u.BN256ToBin(n).split(""))
             };
 
             const wStart = nowNs();
-            // witness[1..8]  = commitment[0..7]
-            // witness[9..16] = nullifierHash[0..7]
+            // witness[1..16]  = commitment[0..15]
+            // witness[17..32] = nullifierHash[0..15]
             const witness = await witnessCalc.calculateWitness(depInput, 0);
             const wEnd = nowNs();
             depositWitnessMs.push(nsToMs(wEnd - wStart));
@@ -152,7 +152,7 @@ describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8
             const commitments     = Array.from({ length: BATCH_DEPOSIT }, (_, k) => BigInt(witness[1 + k]));
             const nullifierHashes = Array.from({ length: BATCH_DEPOSIT }, (_, k) => BigInt(witness[1 + BATCH_DEPOSIT + k]));
 
-            // --- Compute Merkle paths for each of the 8 new leaves ---
+            // --- Compute Merkle paths for each of the 16 new leaves ---
             const batchNewRoots       = [];
             const batchHashPairings   = []; // [noteIdx][levelIdx]
             const batchPairDirections = []; // [noteIdx][levelIdx]
@@ -186,8 +186,8 @@ describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8
             const mEnd = nowNs();
             merklePathMs.push(nsToMs(mEnd - mStart));
 
-            // --- Reformat for Solidity: level-major [10][8] arrays ---
-            // Solidity expects uint256[8][10] and uint8[8][10]
+            // --- Reformat for Solidity: level-major [10][16] arrays ---
+            // Solidity expects uint256[16][10] and uint8[16][10]
             const solHashPairings   = Array.from({ length: 10 }, (_, level) =>
                 batchHashPairings.map(notePath => notePath[level])
             );
@@ -209,7 +209,7 @@ describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8
 
             expect(receipt.status).to.equal(1);
             console.log(
-                `✅ BatchDeposit ${batchIdx + 1} (notes ${batchIdx * 8 + 1}–${batchIdx * 8 + 8}) Gas Used:`,
+                `✅ BatchDeposit ${batchIdx + 1} (notes ${batchIdx * 16 + 1}–${batchIdx * 16 + 16}) Gas Used:`,
                 receipt.gasUsed.toString()
             );
 
@@ -232,7 +232,7 @@ describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8
             }
         }
 
-        // ---- 5 batch withdraw transactions (8 notes each) ----
+        // ---- 2 batch withdraw transactions (16 notes each) ----
         for (let i = 0; i < NUM_WITHDRAW_TXS; i++) {
             const sliceStart = i * BATCH_WITHDRAW;
             const sliceEnd   = sliceStart + BATCH_WITHDRAW;
@@ -257,7 +257,7 @@ describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8
             const pEnd = nowNs();
             withdrawProofMs.push(nsToMs(pEnd - pStart));
 
-            // Expect 24 public signals: 8 roots, 8 nullifierHashes, 8 recipients
+            // Expect 48 public signals: 16 roots, 16 nullifierHashes, 16 recipients
             if (publicSignals.length !== 3 * BATCH_WITHDRAW) {
                 throw new Error(`expected ${3 * BATCH_WITHDRAW} public signals, got ${publicSignals.length}`);
             }
@@ -266,7 +266,7 @@ describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8
             const b = proof.pi_b.slice(0, 2).map(row => $u.reverseCoordinate(row.map($u.BN256ToHex)));
             const c = proof.pi_c.slice(0, 2).map($u.BN256ToHex);
 
-            // [roots(8) | nullifiers(8) | recipients(8)]
+            // [roots(16) | nullifiers(16) | recipients(16)]
             const input = [
                 ...publicSignals.slice(0, BATCH_WITHDRAW),
                 ...publicSignals.slice(BATCH_WITHDRAW, 2 * BATCH_WITHDRAW),
@@ -281,7 +281,7 @@ describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8
                 throw new Error(`expected ${BATCH_WITHDRAW} recipients, got ${recipients.length}`);
             }
 
-            // depositMinedNs has one entry per batch-deposit tx (5 entries).
+            // depositMinedNs has one entry per batch-deposit tx (2 entries).
             // Map note index → deposit tx index.
             const depositTxIndices = Array.from({ length: BATCH_WITHDRAW }, (_, k) =>
                 Math.floor((sliceStart + k) / BATCH_DEPOSIT)
@@ -308,7 +308,7 @@ describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8
         let totalGas = ethers.BigNumber.from(0);
         for (const g of depositGasReceipts) totalGas = totalGas.add(g);
         for (const { gasUsed } of withdrawGasReceipts) totalGas = totalGas.add(gasUsed);
-        console.log("📊 Total Gas Used (5 batch-deposits of 8 + 5 withdrawals of 8):", totalGas.toString());
+        console.log("📊 Total Gas Used (2 batch-deposits of 16 + 2 withdrawals of 16):", totalGas.toString());
 
         const avgGasPrice = withdrawGasReceipts.reduce(
             (sum, { gasPrice }) => sum.add(gasPrice),
@@ -320,10 +320,10 @@ describe("Full Test: 40 deposits (5 batch-deposits of 8), 5 batch withdrawals (8
         console.log("💷 Estimated GBP Cost:", `£${totalGbpCost}`);
 
         // ---- timing summaries ----
-        printStats("Batch deposit witness (BatchDeposit8 circuit, 8 notes)", depositWitnessMs);
-        printStats("Merkle path compute (MiMC, 8 paths per batch)", merklePathMs);
-        printStats("Batch deposit inclusion (submit→mined, 5 txs)", depositInclMs);
-        printStats("Withdraw proof gen (batch of 8)", withdrawProofMs);
+        printStats("Batch deposit witness (BatchDeposit16 circuit, 16 notes)", depositWitnessMs);
+        printStats("Merkle path compute (MiMC, 16 paths per batch)", merklePathMs);
+        printStats("Batch deposit inclusion (submit→mined, 2 txs)", depositInclMs);
+        printStats("Withdraw proof gen (batch of 16)", withdrawProofMs);
         printStats("Withdraw inclusion (submit→mined)", withdrawInclMs);
         printStats("Batch wait (ready→submit withdraw)", batchWaitMs);
         printStats("Batch end-to-end (ready→withdraw mined)", batchEndToEndMs);
