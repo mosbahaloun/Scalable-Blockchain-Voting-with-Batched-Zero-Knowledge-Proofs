@@ -9,7 +9,7 @@ interface IVerifier {
         uint[2] memory a,
         uint[2][2] memory b,
         uint[2] memory c,
-        uint[12] memory input  // 4-batch withdraw: 4*3 = 12 public signals
+        uint[24] memory input  // 8-batch withdraw: 8*3 = 24 public signals
     ) external view returns (bool);
 }
 
@@ -44,8 +44,8 @@ contract Tornado is ReentrancyGuard {
     uint8 public treeLevel = 10;
     uint256 public denomination = 0.01 ether;
 
-    // BATCH_DEPOSIT = 4, matching the BatchDeposit4 circuit
-    uint256 public constant BATCH_DEPOSIT = 4;
+    // BATCH_DEPOSIT = 8, matching the BatchDeposit8 circuit
+    uint256 public constant BATCH_DEPOSIT = 8;
 
     uint256 public nextLeafIdx = 0;
     mapping(uint256 => bool) public roots;
@@ -66,11 +66,11 @@ contract Tornado is ReentrancyGuard {
         76840483767501885884368002925517179365815019383466879774586151314479309584255
     ];
 
-    // Emitted once per batch of 4 deposits
+    // Emitted once per batch of 8 deposits
     event BatchDeposit(
-        uint256[4] roots,
-        uint256[4][10] hashPairings,
-        uint8[4][10] pairDirections
+        uint256[8] roots,
+        uint256[8][10] hashPairings,
+        uint8[8][10] pairDirections
     );
     event Withdrawal(address to, uint256 nullifierHash);
 
@@ -99,20 +99,20 @@ contract Tornado is ReentrancyGuard {
     }
 
     /**
-     * @notice Batch deposit 4 notes in a single transaction.
-     *         Matches the BatchDeposit4 circuit which outputs 4 commitments.
-     * @param _commitments   4 commitment hashes (circuit outputs commitment[0..3])
-     * @param _newRoots      4 new Merkle roots, one per inserted leaf
-     * @param hashPairings   4×10 sibling hashes for each leaf's Merkle path
-     * @param hashDirections 4×10 direction bits (0=left, 1=right) per leaf
+     * @notice Batch deposit 8 notes in a single transaction.
+     *         Matches the BatchDeposit8 circuit which outputs 8 commitments.
+     * @param _commitments   8 commitment hashes (circuit outputs commitment[0..7])
+     * @param _newRoots      8 new Merkle roots, one per inserted leaf
+     * @param hashPairings   level-major [10][8] sibling hashes for each leaf's Merkle path
+     * @param hashDirections level-major [10][8] direction bits (0=left, 1=right) per leaf
      */
     function batchDeposit(
-        uint256[4] calldata _commitments,
-        uint256[4] calldata _newRoots,
-        uint256[4][10] calldata hashPairings,
-        uint8[4][10] calldata hashDirections
+        uint256[8] calldata _commitments,
+        uint256[8] calldata _newRoots,
+        uint256[8][10] calldata hashPairings,
+        uint8[8][10] calldata hashDirections
     ) external payable nonReentrant {
-        // Must send exactly denomination × 4
+        // Must send exactly denomination × 8 (0.08 ETH)
         require(msg.value == denomination * BATCH_DEPOSIT, "incorrect-amount");
         require(nextLeafIdx + BATCH_DEPOSIT <= 2 ** treeLevel, "tree-full");
 
@@ -149,22 +149,22 @@ contract Tornado is ReentrancyGuard {
         Candidate_check[cand] = true;
     }
 
-    // 4-note batch withdraw (unchanged)
+    // 8-note batch withdraw (unchanged)
     function withdraw(
         uint[2] memory a,
         uint[2][2] memory b,
         uint[2] memory c,
-        uint[12] memory input, // 4 roots | 4 nullifierHashes | 4 recipients
-        address payable[4] memory recipients
+        uint[24] memory input, // 8 roots | 8 nullifierHashes | 8 recipients
+        address payable[8] memory recipients
     ) external payable nonReentrant {
         require(
             IVerifier(verifier).verifyProof(a, b, c, input),
             "invalid-proof"
         );
 
-        for (uint i = 0; i < 4; i++) {
+        for (uint i = 0; i < 8; i++) {
             uint256 root          = input[i];
-            uint256 nullifierHash = input[4 + i];
+            uint256 nullifierHash = input[8 + i];
 
             require(!nullifierHashes[nullifierHash], "already-spent");
             require(roots[root], "not-root");
