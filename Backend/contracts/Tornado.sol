@@ -36,22 +36,43 @@ contract Tornado is ReentrancyGuard {
     );
 
     address owner;
+
+    // ---------------------------------------------------------------
+    // Election Authority public key — used to verify EA signatures
+    // on recovery tokens before storing them on-chain.
+    // Set once by the owner after deployment via setElectionAuthority().
+    // ---------------------------------------------------------------
+    address public electionAuthority;
+
     Candidate[] public candidates;
 
-    mapping(string => bool) public voters;
     mapping(address => bool) public Candidate_check;
 
     uint8 public treeLevel = 10;
     uint256 public denomination = 0.01 ether;
 
-    // BATCH_DEPOSIT = 16, matching the BatchDeposit16 circuit
-    uint256 public constant BATCH_DEPOSIT = 16;
+    // BATCH_SIZE = 16, matching the BatchDeposit16 circuit
+    uint256 public constant BATCH_SIZE = 16;
 
     uint256 public nextLeafIdx = 0;
     mapping(uint256 => bool) public roots;
     mapping(uint8 => uint256) lastLevelHash;
     mapping(uint256 => bool) public nullifierHashes;
     mapping(uint256 => bool) public commitments;
+
+    // ---------------------------------------------------------------
+    // Recovery token storage
+    //
+    // H_i = keccak256(abi.encodePacked(RecToken_i, voterPubKey_i))
+    // Storing a single 32-byte hash per voter (vs. four storage slots
+    // for raw token + key) gives recovery tokens their superior gas
+    // scaling compared to voter commitments.
+    //
+    // uniqueId (bytes32) → H_i (bytes32)
+    // uniqueIdUsed guards against replay / duplicate registration.
+    // ---------------------------------------------------------------
+    mapping(bytes32 => bytes32) public recoveryHashes;
+    mapping(bytes32 => bool)    public uniqueIdUsed;
 
     uint256[10] levelDefaults = [
         23183772226880328093887215408966704399401918833188238128725944610428185466379,
@@ -66,13 +87,15 @@ contract Tornado is ReentrancyGuard {
         76840483767501885884368002925517179365815019383466879774586151314479309584255
     ];
 
-    // Emitted once per batch of 16 deposits
-    event BatchDeposit(
+    // Emitted once per voteCommitment call (16 notes)
+    event VoteCommitment(
         uint256[16] roots,
         uint256[16][10] hashPairings,
         uint8[16][10] pairDirections
     );
-    event Withdrawal(address to, uint256 nullifierHash);
+    event VoteSubmission(address to, uint256 nullifierHash);
+    // Emitted once per token inside recoveryToken
+    event RecoveryTokenStored(bytes32 indexed uniqueId, bytes32 recoveryHash);
 
     constructor(
         address _hasher,
@@ -98,44 +121,23 @@ contract Tornado is ReentrancyGuard {
         }
     }
 
-    /**
-     * @notice Batch deposit 16 notes in a single transaction.
-     *         Matches the BatchDeposit16 circuit which outputs 16 commitments.
-     * @param _commitments   16 commitment hashes (circuit outputs commitment[0..15])
-     * @param _newRoots      16 new Merkle roots, one per inserted leaf
-     * @param hashPairings   level-major [10][16] sibling hashes for each leaf's Merkle path
-     * @param hashDirections level-major [10][16] direction bits (0=left, 1=right) per leaf
-     */
-    function batchDeposit(
-        uint256[16] calldata _commitments,
-        uint256[16] calldata _newRoots,
-        uint256[16][10] calldata hashPairings,
-        uint8[16][10] calldata hashDirections
-    ) external payable nonReentrant {
-        // Must send exactly denomination × 16 (0.16 ETH)
-        require(msg.value == denomination * BATCH_DEPOSIT, "incorrect-amount");
-        require(nextLeafIdx + BATCH_DEPOSIT <= 2 ** treeLevel, "tree-full");
-
-        for (uint256 i = 0; i < BATCH_DEPOSIT; i++) {
-            require(!commitments[_commitments[i]], "existing-commitment");
-            require(!roots[_newRoots[i]], "existing-root");
-
-            commitments[_commitments[i]] = true;
-            roots[_newRoots[i]] = true;
-            nextLeafIdx += 1;
-        }
-
-        emit BatchDeposit(_newRoots, hashPairings, hashDirections);
-    }
-
-    function addVoter(string memory _candidateNames) public {
-        require(!voters[_candidateNames], "nid-used");
-        voters[_candidateNames] = true;
-    }
+    // ---------------------------------------------------------------
+    // Admin
+    // ---------------------------------------------------------------
 
     modifier onlyOwner() {
         require(msg.sender == owner, "not-owner");
         _;
+    }
+
+    /**
+     * @notice Register the Election Authority address whose ECDSA
+     *         signatures are required by storeRecoveryToken.
+     *         Must be called once by the owner after deployment.
+     */
+    function setElectionAuthority(address _ea) external onlyOwner {
+        require(_ea != address(0), "zero-address");
+        electionAuthority = _ea;
     }
 
     function addCandidate(
@@ -149,12 +151,121 @@ contract Tornado is ReentrancyGuard {
         Candidate_check[cand] = true;
     }
 
-    // 16-note batch withdraw (unchanged)
-    function withdraw(
+
+    // ---------------------------------------------------------------
+    // Voter commitment — batch deposit (16 notes per tx)
+    // Matches the BatchDeposit16 circom circuit.
+    // ---------------------------------------------------------------
+
+    /**
+     * @notice Register 16 voter commitments in one transaction.
+     * @param _commitments   commitment[0..15] from the BatchDeposit16 circuit
+     * @param _newRoots      one updated Merkle root per inserted leaf
+     * @param hashPairings   level-major [10][16] sibling hashes
+     * @param hashDirections level-major [10][16] direction bits (0=left, 1=right)
+     */
+    function voteCommitment(
+        uint256[16] calldata _commitments,
+        uint256[16] calldata _newRoots,
+        uint256[16][10] calldata hashPairings,
+        uint8[16][10] calldata hashDirections
+    ) external payable nonReentrant {
+        require(msg.value == denomination * BATCH_SIZE, "incorrect-amount");
+        require(nextLeafIdx + BATCH_SIZE <= 2 ** treeLevel, "tree-full");
+
+        for (uint256 i = 0; i < BATCH_SIZE; i++) {
+            require(!commitments[_commitments[i]], "existing-commitment");
+            require(!roots[_newRoots[i]], "existing-root");
+            commitments[_commitments[i]] = true;
+            roots[_newRoots[i]] = true;
+            nextLeafIdx += 1;
+        }
+
+        emit VoteCommitment(_newRoots, hashPairings, hashDirections);
+    }
+
+    // ---------------------------------------------------------------
+    // Privacy-preserving recovery token storage (16 tokens per tx)
+    //
+    // Protocol (per token i):
+    //   1. EA produces:  sigma_i = Sig_EA(uniqueId_i, voterPubKey_i)
+    //   2. Relayer calls storeRecoveryToken with the batch.
+    //   3. Contract verifies sigma_i via ecrecover.
+    //   4. Contract stores: H_i = keccak256(recToken_i || voterPubKey_i)
+    //      — one 32-byte slot, revealing nothing about the voter's
+    //        real-world identity to on-chain observers.
+    // ---------------------------------------------------------------
+
+    /**
+     * @notice Store 16 recovery token hashes on-chain in one transaction.
+     *
+     * @param uniqueIds    16 unique voter identifiers (256-bit random values)
+     * @param recTokens    16 recovery tokens
+     * @param voterPubKeys 16 voter ElGamal public keys (y_voterpubkey)
+     * @param sigs         Packed EA signatures: [v(1)|r(32)|s(32)] × 16 = 1040 bytes
+     *                     where each sig covers keccak256(uniqueId_i || voterPubKey_i)
+     */
+    function recoveryToken(
+        bytes32[16] calldata uniqueIds,
+        bytes32[16] calldata recTokens,
+        bytes32[16] calldata voterPubKeys,
+        bytes calldata sigs        // 65 × 16 = 1040 bytes
+    ) external nonReentrant {
+        require(electionAuthority != address(0), "ea-not-set");
+        require(sigs.length == 65 * 16, "bad-sigs-length");
+
+        for (uint256 i = 0; i < 16; i++) {
+            bytes32 uid = uniqueIds[i];
+            require(!uniqueIdUsed[uid], "uid-already-used");
+
+            // --- verify EA signature over (uniqueId, voterPubKey) ---
+            bytes32 msgHash = keccak256(
+                abi.encodePacked(uid, voterPubKeys[i])
+            );
+            bytes32 ethHash = keccak256(
+                abi.encodePacked("\x19Ethereum Signed Message:\n32", msgHash)
+            );
+
+            uint256 offset = i * 65;
+            uint8   v;
+            bytes32 r;
+            bytes32 s;
+            assembly {
+                // sigs is calldata; calldataload reads 32 bytes at a time.
+                // sigs.offset points to the start of the bytes data in calldata.
+                let base := add(sigs.offset, offset)
+                // v is the first byte
+                v := byte(0, calldataload(base))
+                // r is the next 32 bytes
+                r := calldataload(add(base, 1))
+                // s is the 32 bytes after r
+                s := calldataload(add(base, 33))
+            }
+            require(
+                ecrecover(ethHash, v, r, s) == electionAuthority,
+                "invalid-ea-sig"
+            );
+
+            // --- compute and store H_i (single 32-byte slot) ---
+            bytes32 hi = keccak256(
+                abi.encodePacked(recTokens[i], voterPubKeys[i])
+            );
+
+            uniqueIdUsed[uid]   = true;
+            recoveryHashes[uid] = hi;
+
+            emit RecoveryTokenStored(uid, hi);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // 16-note vote submission
+    // ---------------------------------------------------------------
+    function voteSubmission(
         uint[2] memory a,
         uint[2][2] memory b,
         uint[2] memory c,
-        uint[48] memory input, // 16 roots | 16 nullifierHashes | 16 recipients
+        uint[48] memory input,           // 16 roots | 16 nullifierHashes | 16 recipients
         address payable[16] memory recipients
     ) external payable nonReentrant {
         require(
@@ -183,10 +294,13 @@ contract Tornado is ReentrancyGuard {
             (bool sent, ) = recipient.call{value: denomination}("");
             require(sent, "payment-failed");
 
-            emit Withdrawal(recipient, nullifierHash);
+            emit VoteSubmission(recipient, nullifierHash);
         }
     }
 
+    // ---------------------------------------------------------------
+    // Aggregated ElGamal ciphertext
+    // ---------------------------------------------------------------
     function updateAggregatedCiphertext(
         uint256 c1,
         uint256 c2
